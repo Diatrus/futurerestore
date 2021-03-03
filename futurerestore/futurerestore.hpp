@@ -66,6 +66,8 @@ class futurerestore {
     plist_t _sepbuildmanifest = NULL;
     plist_t _basebandbuildmanifest = NULL;
     
+    const char *_kernelPath = NULL;
+
     const char *_rosePath = NULL;
     const char *_sePath = NULL;
     const char *_savagePath[6];
@@ -102,6 +104,7 @@ public:
     const char *getDeviceBoardNoCopy();
     char *getLatestManifest();
     char *getLatestFirmwareUrl();
+    void downloadLatestRestoreKernel();
     void downloadLatestRose();
     void downloadLatestSE();
     void downloadLatestSavage();
@@ -112,6 +115,7 @@ public:
     
     void setSepManifestPath(const char *sepManifestPath);
     void setBasebandManifestPath(const char *basebandManifestPath);
+    void loadKernel(const char *kernelPath);
     void loadRose(const char *rosePath);
     void loadSE(const char *sePath);
     void loadSavage(const char *savagePath[6]);

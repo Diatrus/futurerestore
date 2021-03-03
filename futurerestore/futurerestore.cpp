@@ -54,6 +54,8 @@ extern "C"{
 #define FUTURERESTORE_TMP_PATH TMP_PATH"/futurerestore"
 #endif
 
+#define KERNEL_TMP_PATH FUTURERESTORE_TMP_PATH"/kernel.bin"
+
 #define ROSE_TMP_PATH FUTURERESTORE_TMP_PATH"/rose.bin"
 #define SE_TMP_PATH FUTURERESTORE_TMP_PATH"/se.sefw"
 
@@ -68,6 +70,7 @@ extern "C"{
 
 #define VERIDIAN_DGM_TMP_PATH FUTURERESTORE_TMP_PATH"/veridianDGM.der"
 #define VERIDIAN_FWM_TMP_PATH FUTURERESTORE_TMP_PATH"/veridianFWM.plist"
+
 #define BASEBAND_TMP_PATH FUTURERESTORE_TMP_PATH"/baseband.bbfw"
 #define BASEBAND_MANIFEST_TMP_PATH FUTURERESTORE_TMP_PATH"/basebandManifest.plist"
 #define SEP_TMP_PATH FUTURERESTORE_TMP_PATH"/sep.im4p"
@@ -708,6 +711,7 @@ void futurerestore::doRestore(const char *ipsw){
             retassure((sep_build_identity = getBuildidentityWithBoardconfig(_sepbuildmanifest, client->device->hardware_model, !_isUpdateInstall)),
                       "ERROR: Unable to find any build identities for SEP\n");
         }
+        _client->sepBuildIdentity = sep_build_identity;
     }
 
     plist_t manifest = plist_dict_get_item(build_identity, "Manifest"); //this is the buildidentity used for restore
@@ -1022,7 +1026,11 @@ void futurerestore::doRestore(const char *ipsw){
     if (_client->image4supported) get_sep_nonce(client, &client->sepnonce, &client->sepnonce_size);
     get_ap_nonce(client, &client->nonce, &client->nonce_size);
     get_ecid(client, &client->ecid);
-
+    if (_client->image4supported) {
+        info("getting SEP ticket\n");
+        retassure(!get_tss_response(client, sep_build_identity, &client->septss), "ERROR: Unable to get signing tickets for SEP\n");
+        retassure(_client->sepfwdatasize && _client->sepfwdata, "SEP is not loaded, refusing to continue");
+    }
     if (client->mode->index == MODE_RECOVERY) {
         retassure(client->srnm,"ERROR: could not retrieve device serial number. Can't continue.\n");
 
@@ -1035,12 +1043,6 @@ void futurerestore::doRestore(const char *ipsw){
         retassure(!recovery_enter_restore(client, build_identity),"ERROR: Unable to place device into restore mode\n");
 
         recovery_client_free(client);
-    }
-
-    if (_client->image4supported) {
-        info("getting SEP ticket\n");
-        retassure(!get_tss_response(client, sep_build_identity, &client->septss), "ERROR: Unable to get signing tickets for SEP\n");
-        retassure(_client->sepfwdatasize && _client->sepfwdata, "SEP is not loaded, refusing to continue");
     }
     
     mutex_lock(&client->device_event_mutex);
@@ -1254,6 +1256,16 @@ char *futurerestore::getLatestFirmwareUrl(){
     return getLatestManifest(),__latestFirmwareUrl;
 }
 
+void futurerestore::downloadLatestRestoreKernel(){
+    char * manifeststr = getLatestManifest();
+    char *kernelStr = (elemExists("RestoreKernelCache", manifeststr, getDeviceBoardNoCopy(), 0) ? getPathOfElementInManifest("RestoreKernelCache", manifeststr, getDeviceBoardNoCopy(), 0) : NULL);
+    if(kernelStr) {
+        info("downloading Restore Kernel firmware\n\n");
+        retassure(!downloadPartialzip(getLatestFirmwareUrl(), kernelStr, _kernelPath = KERNEL_TMP_PATH), "could not download Restore Kernel\n");
+        loadKernel(KERNEL_TMP_PATH);
+    }
+}
+
 void futurerestore::downloadLatestRose(){
     char * manifeststr = getLatestManifest();
     char *roseStr = (elemExists("Rap,RTKitOS", manifeststr, getDeviceBoardNoCopy(), 0) ? getPathOfElementInManifest("Rap,RTKitOS", manifeststr, getDeviceBoardNoCopy(), 0) : NULL);
@@ -1351,6 +1363,7 @@ void futurerestore::downloadLatestFirmwareComponents(){
     }
     if(elemExists("BMU,DigestMap", manifeststr, getDeviceBoardNoCopy(), 0) || elemExists("BMU,FirmwareMap", manifeststr, getDeviceBoardNoCopy(), 0))
         downloadLatestVeridian();
+    downloadLatestRestoreKernel();
     info("Finished downloading the latest firmware components!\n");
 }
 
@@ -1381,6 +1394,23 @@ void futurerestore::setSepManifestPath(const char *sepManifestPath){
 void futurerestore::setBasebandManifestPath(const char *basebandManifestPath){
     retassure(_basebandbuildmanifest = loadPlistFromFile(_basebandbuildmanifestPath = basebandManifestPath), "failed to load BasebandManifest");
 };
+
+void futurerestore::loadKernel(const char *kernelPath){
+    FILE *fkernel = NULL;
+    retassure(fkernel = fopen(kernelPath, "rb"), "failed to read Restore Kernel\n");
+    
+    fseek(fkernel, 0, SEEK_END);
+    _client->kerneldatasize = ftell(fkernel);
+    fseek(fkernel, 0, SEEK_SET);
+    
+    retassure(_client->kerneldata = (char*)malloc(_client->kerneldatasize), "failed to malloc memory for Restore Kernel\n");
+    
+    size_t freadRet=0;
+    retassure((freadRet = fread(_client->kerneldata, 1, _client->kerneldatasize, fkernel)) == _client->kerneldatasize,
+              "failed to load Restore Kernel. size=%zu but fread returned %zu\n",_client->kerneldatasize,freadRet);
+    
+    fclose(fkernel);
+}
 
 void futurerestore::loadRose(const char *rosePath){
     FILE *frose = NULL;
